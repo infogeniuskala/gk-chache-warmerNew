@@ -1,0 +1,121 @@
+name: GeniusKala Cache Warmer
+
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Paste URLs here"
+        required: true
+        type: string
+
+      device:
+        description: "Device cache"
+        required: true
+        default: "both"
+        type: choice
+        options:
+          - both
+          - desktop
+          - mobile
+
+      navigation:
+        description: "Navigation type"
+        required: true
+        default: "direct"
+        type: choice
+        options:
+          - direct
+          - internal
+          - both
+
+      verify:
+        description: "Verify warm"
+        required: true
+        default: true
+        type: boolean
+
+      delay:
+        description: "Seconds between URLs"
+        required: true
+        default: "3"
+        type: string
+
+      verify_delay:
+        description: "Seconds before verification"
+        required: true
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: geniuskala-cache-warmer
+  cancel-in-progress: false
+
+jobs:
+  warm-cache:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install requirements
+        run: pip install -r requirements.txt
+
+      - name: Prepare URLs
+        shell: bash
+        env:
+          INPUT_URLS: ${{ inputs.urls }}
+        run: |
+          python - <<'PY'
+          import os,re
+
+          text=os.environ.get("INPUT_URLS","")
+          urls=re.findall(r'https?://\S+',text)
+
+          with open("runtime-urls.txt","w",encoding="utf-8") as f:
+              for url in urls:
+                  f.write(url.strip()+"\n")
+
+          print("URL count:",len(urls))
+          PY
+
+      - name: Run cache warmer
+        shell: bash
+        run: |
+          ARGS=(
+            --file runtime-urls.txt
+            --device "${{ inputs.device }}"
+            --navigation "${{ inputs.navigation }}"
+            --auth guest
+            --delay "${{ inputs.delay }}"
+            --verify-delay "${{ inputs.verify_delay }}"
+            --timeout 60
+          )
+
+          if [ "${{ inputs.verify }}" = "false" ]; then
+            ARGS+=(--no-verify)
+          fi
+
+          python -u crawler.py "${ARGS[@]}"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cache-warmer-report-${{ github.run_number }}
+          path: logs/
+          if-no-files-found: ignore
+          retention-days: 14
